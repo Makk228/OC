@@ -1,0 +1,29 @@
+#!/bin/bash
+
+source ./watcher.conf
+
+running=true
+event_count=0
+
+log_message() {
+    local level="$1"
+    local message="$2"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG"
+}
+
+init_fifo() {
+    if [[ ! -p "$PIPE" ]]; then
+        mkfifo "$PIPE"
+    fi
+}
+
+main_loop() {
+    log_message "INFO" "Watcher started"
+
+    while "$running"; do
+        sleep "$SLEEP_INTERVAL"
+    done
+}
+
+init_fifo
+main_loop

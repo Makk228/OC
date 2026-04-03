@@ -1,0 +1,5 @@
+PIPE="./watcher.fifo"
+LOG="./watcher.log"
+PIDFILE="./watcher.pid"
+SLEEP_INTERVAL=2
+LOG_LEVEL="INFO"
