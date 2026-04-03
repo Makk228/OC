@@ -9,6 +9,7 @@ LOG="./watcher.log"
 PIDFILE="./watcher.pid"
 SLEEP_INTERVAL=2
 LOG_LEVEL="INFO"
+REPORT_DIR="./reports"
 EOF
 fi
 
@@ -20,11 +21,42 @@ status_requested=false
 rotate_requested=false
 event_count=0
 start_time=$(date +%s)
+fifo_opened=false
+
+level_to_num() {
+    case "$1" in
+        DEBUG) echo 0 ;;
+        INFO)  echo 1 ;;
+        WARN)  echo 2 ;;
+        ERROR) echo 3 ;;
+        *)     echo 1 ;;
+    esac
+}
+
+should_log() {
+    local msg_level="$1"
+    local current_level
+    local msg_num
+    local current_num
+
+    current_level="${LOG_LEVEL:-INFO}"
+    msg_num=$(level_to_num "$msg_level")
+    current_num=$(level_to_num "$current_level")
+
+    [[ "$msg_num" -ge "$current_num" ]]
+}
 
 log_message() {
     local level="$1"
     local message="$2"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG"
+
+    if should_log "$level"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG"
+    fi
+}
+
+init_paths() {
+    mkdir -p "$REPORT_DIR"
 }
 
 init_fifo() {
@@ -34,18 +66,31 @@ init_fifo() {
     fi
 }
 
+open_fifo() {
+    init_fifo
+    exec 3<> "$PIPE"
+    fifo_opened=true
+}
+
+close_fifo() {
+    if "$fifo_opened"; then
+        exec 3>&-
+        exec 3<&-
+        fifo_opened=false
+    fi
+}
+
 write_pid() {
     echo $$ > "$PIDFILE"
 }
 
 cleanup() {
+    close_fifo
     rm -f "$PIDFILE"
 }
 
 end_function() {
     log_message "INFO" "Watcher stopping"
-    exec 3>&-
-    exec 3<&-
     cleanup
     exit 0
 }
@@ -63,7 +108,10 @@ request_rotate() {
 }
 
 do_reload() {
+    close_fifo
     source "$CONFIG_FILE"
+    init_paths
+    open_fifo
     log_message "INFO" "Configuration reloaded"
 }
 
@@ -71,20 +119,21 @@ do_status() {
     local now uptime
     now=$(date +%s)
     uptime=$((now - start_time))
-    log_message "INFO" "STATUS pid=$$ events=$event_count uptime=${uptime}s pipe=$PIPE log=$LOG interval=$SLEEP_INTERVAL"
+
+    log_message "INFO" "STATUS pid=$$ events=$event_count uptime=${uptime}s pipe=$PIPE log=$LOG interval=$SLEEP_INTERVAL level=$LOG_LEVEL"
 }
 
 do_rotate() {
-    local ts new_log
+    local ts archived_log
     ts=$(date '+%Y%m%d_%H%M%S')
-    new_log="${LOG}.${ts}"
+    archived_log="${LOG}.${ts}"
 
     if [[ -f "$LOG" ]]; then
-        mv "$LOG" "$new_log"
+        mv "$LOG" "$archived_log"
     fi
 
     touch "$LOG"
-    log_message "INFO" "Log rotated, previous file: $new_log"
+    log_message "INFO" "Log rotated, previous file: $archived_log"
 }
 
 handle_flag() {
@@ -102,16 +151,26 @@ process_fifo_message() {
     local line="$1"
 
     if [[ -z "$line" ]]; then
+        log_message "WARN" "Empty FIFO message ignored"
         return 0
     fi
 
     case "$line" in
         STATUS)
+            log_message "INFO" "FIFO command STATUS received"
             status_requested=true
             ;;
         STOP)
             log_message "INFO" "FIFO command STOP received"
             end_function
+            ;;
+        RELOAD)
+            log_message "INFO" "FIFO command RELOAD received"
+            reload_requested=true
+            ;;
+        ROTATE)
+            log_message "INFO" "FIFO command ROTATE received"
+            rotate_requested=true
             ;;
         MODE_CHANGE)
             log_message "INFO" "FIFO command MODE_CHANGE received"
@@ -124,10 +183,10 @@ process_fifo_message() {
 }
 
 main_loop() {
-    log_message "INFO" "Watcher started"
+    init_paths
     write_pid
-    init_fifo
-    exec 3<> "$PIPE"
+    open_fifo
+    log_message "INFO" "Watcher started"
 
     while "$running"; do
         handle_flag reload_requested do_reload
@@ -159,7 +218,14 @@ start_daemon() {
     fi
 
     nohup "$0" run >/dev/null 2>&1 &
-    echo "Watcher started"
+    sleep 1
+
+    if is_running; then
+        echo "Watcher started with PID $(cat "$PIDFILE")"
+    else
+        echo "Failed to start watcher"
+        exit 1
+    fi
 }
 
 stop_daemon() {

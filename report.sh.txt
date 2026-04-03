@@ -1,0 +1,51 @@
+#!/bin/bash
+
+CONFIG_FILE="./watcher.conf"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+source "$CONFIG_FILE"
+
+mkdir -p "$REPORT_DIR"
+
+timestamp=$(date '+%Y%m%d_%H%M%S')
+report_file="${REPORT_DIR}/report_${timestamp}.txt"
+
+total_lines=0
+event_lines=0
+status_lines=0
+reload_lines=0
+rotate_lines=0
+stop_lines=0
+warn_lines=0
+error_lines=0
+
+if [[ -f "$LOG" ]]; then
+    total_lines=$(wc -l < "$LOG")
+    event_lines=$(grep -c "FIFO event:" "$LOG" 2>/dev/null || true)
+    status_lines=$(grep -c "STATUS " "$LOG" 2>/dev/null || true)
+    reload_lines=$(grep -c "Configuration reloaded" "$LOG" 2>/dev/null || true)
+    rotate_lines=$(grep -c "Log rotated" "$LOG" 2>/dev/null || true)
+    stop_lines=$(grep -c "Watcher stopping" "$LOG" 2>/dev/null || true)
+    warn_lines=$(grep -c "\[WARN\]" "$LOG" 2>/dev/null || true)
+    error_lines=$(grep -c "\[ERROR\]" "$LOG" 2>/dev/null || true)
+fi
+
+{
+    echo "Watcher report"
+    echo "Generated at: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Log file: $LOG"
+    echo "Total log lines: $total_lines"
+    echo "FIFO events: $event_lines"
+    echo "Status snapshots: $status_lines"
+    echo "Reload operations: $reload_lines"
+    echo "Log rotations: $rotate_lines"
+    echo "Graceful stops: $stop_lines"
+    echo "Warnings: $warn_lines"
+    echo "Errors: $error_lines"
+} > "$report_file"
+
+echo "Report saved to $report_file"
