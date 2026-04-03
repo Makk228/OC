@@ -1,9 +1,25 @@
 #!/bin/bash
 
-source ./watcher.conf
+CONFIG_FILE="./watcher.conf"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    cat > "$CONFIG_FILE" <<'EOF'
+PIPE="./watcher.fifo"
+LOG="./watcher.log"
+PIDFILE="./watcher.pid"
+SLEEP_INTERVAL=2
+LOG_LEVEL="INFO"
+EOF
+fi
+
+source "$CONFIG_FILE"
 
 running=true
+reload_requested=false
+status_requested=false
+rotate_requested=false
 event_count=0
+start_time=$(date +%s)
 
 log_message() {
     local level="$1"
@@ -13,17 +29,120 @@ log_message() {
 
 init_fifo() {
     if [[ ! -p "$PIPE" ]]; then
+        rm -f "$PIPE"
         mkfifo "$PIPE"
     fi
 }
 
+cleanup() {
+    rm -f "$PIDFILE"
+}
+
+end_function() {
+    log_message "INFO" "Watcher stopping"
+    cleanup
+    exit 0
+}
+
+request_reload() {
+    reload_requested=true
+}
+
+request_status() {
+    status_requested=true
+}
+
+request_rotate() {
+    rotate_requested=true
+}
+
+do_reload() {
+    source "$CONFIG_FILE"
+    log_message "INFO" "Configuration reloaded"
+}
+
+do_status() {
+    local now uptime
+    now=$(date +%s)
+    uptime=$((now - start_time))
+
+    log_message "INFO" "STATUS pid=$$ events=$event_count uptime=${uptime}s pipe=$PIPE log=$LOG interval=$SLEEP_INTERVAL"
+}
+
+do_rotate() {
+    local ts new_log
+    ts=$(date '+%Y%m%d_%H%M%S')
+    new_log="${LOG}.${ts}"
+
+    if [[ -f "$LOG" ]]; then
+        mv "$LOG" "$new_log"
+    fi
+
+    touch "$LOG"
+    log_message "INFO" "Log rotated, previous file: $new_log"
+}
+
+handle_flag() {
+    local flag_name="$1"
+    local action="$2"
+    declare -n flag_ref="$flag_name"
+
+    if "$flag_ref"; then
+        "$action"
+        flag_ref=false
+    fi
+}
+
+write_pid() {
+    echo $$ > "$PIDFILE"
+}
+
+process_fifo_message() {
+    local line="$1"
+
+    if [[ -z "$line" ]]; then
+        return 0
+    fi
+
+    case "$line" in
+        STATUS)
+            status_requested=true
+            ;;
+        STOP)
+            log_message "INFO" "FIFO command STOP received"
+            end_function
+            ;;
+        MODE_CHANGE)
+            log_message "INFO" "FIFO command MODE_CHANGE received"
+            ;;
+        *)
+            ((event_count++))
+            log_message "INFO" "FIFO event: $line"
+            ;;
+    esac
+}
+
 main_loop() {
     log_message "INFO" "Watcher started"
+    write_pid
+    init_fifo
 
     while "$running"; do
+        handle_flag reload_requested do_reload
+        handle_flag status_requested do_status
+        handle_flag rotate_requested do_rotate
+
+        if IFS= read -r -t 1 line < "$PIPE"; then
+            process_fifo_message "$line"
+        fi
+
         sleep "$SLEEP_INTERVAL"
     done
 }
 
-init_fifo
+trap end_function TERM INT
+trap request_reload HUP
+trap request_status USR1
+trap request_rotate USR2
+
 main_loop
