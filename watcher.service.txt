@@ -1,0 +1,18 @@
+[Unit]
+Description=Process Watcher Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lab3
+ExecStart=%h/lab3/watcher.sh run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
