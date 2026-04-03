@@ -34,12 +34,18 @@ init_fifo() {
     fi
 }
 
+write_pid() {
+    echo $$ > "$PIDFILE"
+}
+
 cleanup() {
     rm -f "$PIDFILE"
 }
 
 end_function() {
     log_message "INFO" "Watcher stopping"
+    exec 3>&-
+    exec 3<&-
     cleanup
     exit 0
 }
@@ -65,7 +71,6 @@ do_status() {
     local now uptime
     now=$(date +%s)
     uptime=$((now - start_time))
-
     log_message "INFO" "STATUS pid=$$ events=$event_count uptime=${uptime}s pipe=$PIPE log=$LOG interval=$SLEEP_INTERVAL"
 }
 
@@ -91,10 +96,6 @@ handle_flag() {
         "$action"
         flag_ref=false
     fi
-}
-
-write_pid() {
-    echo $$ > "$PIDFILE"
 }
 
 process_fifo_message() {
@@ -126,13 +127,14 @@ main_loop() {
     log_message "INFO" "Watcher started"
     write_pid
     init_fifo
+    exec 3<> "$PIPE"
 
     while "$running"; do
         handle_flag reload_requested do_reload
         handle_flag status_requested do_status
         handle_flag rotate_requested do_rotate
 
-        if IFS= read -r -t 1 line < "$PIPE"; then
+        if IFS= read -r -t 1 line <&3; then
             process_fifo_message "$line"
         fi
 
@@ -140,9 +142,66 @@ main_loop() {
     done
 }
 
+is_running() {
+    if [[ -f "$PIDFILE" ]]; then
+        local pid
+        pid=$(cat "$PIDFILE")
+        kill -0 "$pid" 2>/dev/null
+        return $?
+    fi
+    return 1
+}
+
+start_daemon() {
+    if is_running; then
+        echo "Watcher already running with PID $(cat "$PIDFILE")"
+        exit 1
+    fi
+
+    nohup "$0" run >/dev/null 2>&1 &
+    echo "Watcher started"
+}
+
+stop_daemon() {
+    if is_running; then
+        local pid
+        pid=$(cat "$PIDFILE")
+        kill -TERM "$pid"
+        echo "Watcher stop signal sent to PID $pid"
+    else
+        echo "Watcher is not running"
+        rm -f "$PIDFILE"
+    fi
+}
+
+status_daemon() {
+    if is_running; then
+        echo "Watcher is running with PID $(cat "$PIDFILE")"
+    else
+        echo "Watcher is not running"
+    fi
+}
+
 trap end_function TERM INT
 trap request_reload HUP
 trap request_status USR1
 trap request_rotate USR2
 
-main_loop
+case "$1" in
+    start)
+        start_daemon
+        ;;
+    stop)
+        stop_daemon
+        ;;
+    status)
+        status_daemon
+        ;;
+    run)
+        main_loop
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status|run}"
+        exit 1
+        ;;
+esac
