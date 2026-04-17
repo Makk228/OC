@@ -1,0 +1,121 @@
+#!/bin/bash
+
+if [[ $# -ne 1 ]]; then
+    echo "Error: exactly one parameter is required"
+    exit 1
+fi
+
+REQ_NAME="$1"
+
+if [[ "$REQ_NAME" == */* ]]; then
+    echo "Error: pass only file name without path"
+    exit 1
+fi
+
+TR_DIR="$HOME/.trash"
+TR_LOG="$HOME/.trash.log"
+
+if [[ ! -d "$TR_DIR" ]]; then
+    echo "Error: trash directory not found: $TR_DIR"
+    exit 1
+fi
+
+if [[ ! -f "$TR_LOG" ]]; then
+    echo "Error: trash log not found: $TR_LOG"
+    exit 1
+fi
+
+FOUND=0
+
+while IFS=$'\t' read -r OLD_PATH LINK_NAME; do
+    [[ -z "$OLD_PATH" || -z "$LINK_NAME" ]] && continue
+
+    BASE_NAME="$(basename "$OLD_PATH")"
+
+    if [[ "$BASE_NAME" != "$REQ_NAME" ]]; then
+        continue
+    fi
+
+    FOUND=1
+    echo "Found: $OLD_PATH"
+    printf 'Restore this file? [y/n]: '
+    read -r ANSWER
+
+    case "$ANSWER" in
+        y|Y|yes|YES)
+            SRC_FILE="$TR_DIR/$LINK_NAME"
+
+            if [[ ! -e "$SRC_FILE" ]]; then
+                echo "Warning: file $SRC_FILE not found in trash, skipped"
+                continue
+            fi
+
+            TARGET_DIR="$(dirname "$OLD_PATH")"
+            TARGET_NAME="$(basename "$OLD_PATH")"
+
+            if [[ ! -d "$TARGET_DIR" ]]; then
+                echo "Warning: original directory does not exist, restoring to $HOME"
+                TARGET_DIR="$HOME"
+            fi
+
+            TARGET_PATH="$TARGET_DIR/$TARGET_NAME"
+
+            while [[ -e "$TARGET_PATH" ]]; do
+                echo "File already exists: $TARGET_PATH"
+                printf 'Enter new name: '
+                read -r NEW_NAME
+
+                if [[ -z "$NEW_NAME" ]]; then
+                    echo "Error: name cannot be empty"
+                    continue
+                fi
+
+                if [[ "$NEW_NAME" == */* ]]; then
+                    echo "Error: name must not contain /"
+                    continue
+                fi
+
+                TARGET_PATH="$TARGET_DIR/$NEW_NAME"
+            done
+
+            ln "$SRC_FILE" "$TARGET_PATH" || {
+                echo "Error: cannot restore file to $TARGET_PATH"
+                continue
+            }
+
+            rm "$SRC_FILE" || {
+                echo "Error: restored link created, but failed to remove $SRC_FILE from trash"
+                continue
+            }
+
+            TMP_LOG="$(mktemp)" || {
+                echo "Error: cannot create temporary file"
+                exit 1
+            }
+
+            awk -F '\t' -v old="$OLD_PATH" -v link="$LINK_NAME" '
+                !($1 == old && $2 == link)
+            ' "$TR_LOG" > "$TMP_LOG" || {
+                echo "Error: cannot update trash log"
+                rm -f "$TMP_LOG"
+                exit 1
+            }
+
+            mv "$TMP_LOG" "$TR_LOG" || {
+                echo "Error: cannot replace trash log"
+                rm -f "$TMP_LOG"
+                exit 1
+            }
+
+            echo "Restored to: $TARGET_PATH"
+            ;;
+        *)
+            echo "Skipped: $OLD_PATH"
+            ;;
+    esac
+done < "$TR_LOG"
+
+if [[ $FOUND -eq 0 ]]; then
+    echo "No entries found for file name: $REQ_NAME"
+    exit 1
+fi
