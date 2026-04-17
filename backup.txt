@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+HOME_DIR="/home/n1ckerr0r"
+SOURCE_DIR="$HOME_DIR/source"
+REPORT_FILE="$HOME_DIR/backup-report"
+
+CURRENT_DATE=$(date +"%Y-%m-%d")
+
+# Поиск последнего бекапа
+LAST_BACKUP=$(ls -d $HOME_DIR/Backup-* 2>/dev/null | sort | tail --lines=1)
+
+# По умолчанию считается, что бекапа нет
+USE_EXISTING=false
+
+if [[ -n "$LAST_BACKUP" ]]; then
+    LAST_DATE=$(basename "$LAST_BACKUP" | cut --delimiter '-' --fields=2-4)
+    
+    LAST_SEC=$(date -d "$LAST_DATE" +%s)
+    CUR_SEC=$(date -d "$CURRENT_DATE" +%s)
+
+    DIFF_DAYS=$(( (CUR_SEC - LAST_SEC) / 86400 ))
+
+    if [[ $DIFF_DAYS -le 7 ]]; then
+        USE_EXISTING=true
+    fi
+fi
+
+# Первый вариант
+if [[ "$USE_EXISTING" = false ]]; then
+
+    NEW_BACKUP="$HOME_DIR/Backup-$CURRENT_DATE"
+    mkdir "$NEW_BACKUP"
+
+    echo "[$CURRENT_DATE] Created backup directory: $NEW_BACKUP" >> "$REPORT_FILE"
+
+    for file in "$SOURCE_DIR"/*; do
+        filename=$(basename "$file")
+        cp "$file" "$NEW_BACKUP/"
+        echo "$filename" >> "$REPORT_FILE"
+    done
+
+# Второй вариант
+else
+    echo "[$CURRENT_DATE] Updating backup directory: $LAST_BACKUP" >> "$REPORT_FILE"
+
+    for file in "$SOURCE_DIR"/*; do
+        filename=$(basename "$file")
+        target="$LAST_BACKUP/$filename"
+
+        if [[ ! -f "$target" ]]; then
+            cp "$file" "$LAST_BACKUP/"
+            echo "Added new file: $filename" >> "$REPORT_FILE"
+
+        else
+            size_src=$(stat -c%s "$file")
+            size_dst=$(stat -c%s "$target")
+
+            if [[ "$size_src" -ne "$size_dst" ]]; then
+
+                new_name="$filename.$CURRENT_DATE"
+                mv "$target" "$LAST_BACKUP/$new_name"
+
+                cp "$file" "$LAST_BACKUP/"
+
+                echo "Updated file: $filename, old version renamed to $new_name" >> "$REPORT_FILE"
+            fi
+        fi
+    done
+fi

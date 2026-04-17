@@ -1,0 +1,43 @@
+# --- Очистка окружения ---
+rm -rf ~/Backup-* ~/source ~/backup-report
+mkdir ~/source
+
+# --- Создаём "свежий" backup ---
+mkdir ~/Backup-$(date +%Y-%m-%d)
+
+# --- Добавляем в backup исходные файлы ---
+echo "old" > ~/Backup-$(date +%Y-%m-%d)/a.txt
+echo "same" > ~/Backup-$(date +%Y-%m-%d)/b.txt
+
+# --- Формируем source (3 случая) ---
+
+# 1. изменённый файл (должна появиться версия)
+echo "changed content" > ~/source/a.txt
+
+# 2. одинаковый файл (ничего не происходит)
+echo "same" > ~/source/b.txt
+
+# 3. новый файл (добавляется)
+echo "new file" > ~/source/c.txt
+
+# --- Запуск ---
+./script3.sh
+
+# --- Проверка: новый backup НЕ создался ---
+ls ~ | grep Backup-
+
+# --- Проверка содержимого ---
+ls ~/Backup-$(date +%Y-%m-%d)
+
+# --- Проверка версии файла ---
+cat ~/Backup-$(date +%Y-%m-%d)/a.txt
+cat ~/Backup-$(date +%Y-%m-%d)/a.txt.$(date +%Y-%m-%d)
+
+# --- Проверка, что b.txt не продублировался ---
+ls ~/Backup-$(date +%Y-%m-%d) | grep b.txt
+
+# --- Проверка нового файла ---
+cat ~/Backup-$(date +%Y-%m-%d)/c.txt
+
+# --- Проверка отчёта ---
+cat ~/backup-report

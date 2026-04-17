@@ -1,0 +1,22 @@
+# --- Очистка окружения ---
+rm -rf ~/Backup-* ~/source ~/backup-report
+
+# --- Создаём source и файлы ---
+mkdir ~/source
+echo "hello" > ~/source/a.txt
+echo "world" > ~/source/b.txt
+
+# --- Запускаем скрипт ---
+./script3.sh
+
+# --- Проверяем: backup создан ---
+ls ~ | grep Backup-
+
+# --- Проверяем: файлы скопированы ---
+ls ~/Backup-$(date +%Y-%m-%d)
+
+# --- Проверяем: содержимое совпадает ---
+cat ~/Backup-$(date +%Y-%m-%d)/a.txt
+
+# --- Проверяем отчёт ---
+cat ~/backup-report
