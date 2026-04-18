@@ -1,0 +1,33 @@
+#!/bin/bash
+
+tmpfile=$(mktemp)
+
+for pid_dir in /proc/[0-9]*; do
+    pid="${pid_dir##*/}"
+
+    status_file="$pid_dir/status"
+    sched_file="$pid_dir/sched"
+
+    if [[ ! -r "$status_file" || ! -r "$sched_file" ]]; then
+        continue
+    fi
+
+    ppid=$(awk '/^PPid:/ {print $2}' "$status_file")
+    sum_exec_runtime=$(awk '/sum_exec_runtime/ {print $3}' "$sched_file")
+    nr_switches=$(awk '/nr_switches/ {print $3}' "$sched_file")
+
+    if [[ -z "$ppid" || -z "$sum_exec_runtime" || -z "$nr_switches" ]]; then
+        continue
+    fi
+
+    if [[ "$nr_switches" -eq 0 ]]; then
+        art=0
+    else
+        art=$(awk -v sum="$sum_exec_runtime" -v sw="$nr_switches" 'BEGIN { printf "%.6f", sum / sw }')
+    fi
+
+    echo "ProcessID=$pid : Parent_ProcessID=$ppid : Average_Running_Time=$art" >> "$tmpfile"
+done
+
+sort -t'=' -k3,3n "$tmpfile" > task9_result.txt
+rm -f "$tmpfile"
