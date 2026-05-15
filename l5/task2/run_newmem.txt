@@ -1,0 +1,43 @@
+#!/bin/bash
+
+cd "$(dirname "$0")"
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 N K"
+    exit 1
+fi
+
+N="$1"
+K="$2"
+
+if ! [[ "$N" =~ ^[0-9]+$ ]]; then
+    echo "Error: N must be a positive integer"
+    exit 1
+fi
+
+if ! [[ "$K" =~ ^[0-9]+$ ]]; then
+    echo "Error: K must be a positive integer"
+    exit 1
+fi
+
+rm -f newmem_*.pid
+: > newmem_run.log
+
+echo "Start experiment: N=$N K=$K" >> newmem_run.log
+echo "Start time: $(date '+%H:%M:%S')" >> newmem_run.log
+
+for ((i = 1; i <= K; i++))
+do
+    ./newmem.bash "$N" &
+    pid=$!
+
+    echo "$pid" > "newmem_${i}.pid"
+    echo "$(date '+%H:%M:%S') started process $i PID=$pid N=$N" >> newmem_run.log
+
+    sleep 1
+done
+
+wait
+
+echo "End time: $(date '+%H:%M:%S')" >> newmem_run.log
+echo "All processes finished" >> newmem_run.log
