@@ -1,0 +1,130 @@
+#!/bin/bash
+
+HOME_DIR="$HOME"
+RESTORE_DIR="$HOME_DIR/restore"
+
+error() {
+    echo "Error: $1" >&2
+}
+
+safe_name() {
+    printf '%q' "$1"
+}
+
+is_valid_date() {
+    date -d "$1" '+%F' >/dev/null 2>&1
+}
+
+get_latest_backup() {
+    local best_dir=""
+    local best_sec=0
+
+    while IFS= read -r -d '' dir; do
+        local base
+        local date_part
+        local dir_sec
+
+        base="$(basename -- "$dir")"
+        date_part="${base#Backup-}"
+
+        if ! [[ "$date_part" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            continue
+        fi
+
+        if ! is_valid_date "$date_part"; then
+            continue
+        fi
+
+        dir_sec="$(date -d "$date_part" +%s)"
+
+        if (( dir_sec > best_sec )); then
+            best_sec="$dir_sec"
+            best_dir="$dir"
+        fi
+    done < <(find "$HOME_DIR" -maxdepth 1 -type d -name 'Backup-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' -print0 2>/dev/null)
+
+    printf '%s' "$best_dir"
+}
+
+is_version_file() {
+    local name="$1"
+
+    if [[ "$name" =~ \.[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        return 0
+    fi
+
+    if [[ "$name" =~ \.[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+$ ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+LATEST_BACKUP="$(get_latest_backup)"
+
+if [[ -z "$LATEST_BACKUP" ]]; then
+    error "no backup directories found in [$HOME_DIR]"
+    exit 1
+fi
+
+if [[ ! -d "$LATEST_BACKUP" ]]; then
+    error "latest backup is not a directory: [$LATEST_BACKUP]"
+    exit 1
+fi
+
+if ! mkdir -p -- "$RESTORE_DIR"; then
+    error "cannot create restore directory: [$RESTORE_DIR]"
+    exit 1
+fi
+
+if [[ ! -w "$RESTORE_DIR" ]]; then
+    error "restore directory is not writable: [$RESTORE_DIR]"
+    exit 1
+fi
+
+copied_any=0
+skipped_any=0
+errors_any=0
+
+while IFS= read -r -d '' backup_file; do
+    name="$(basename -- "$backup_file")"
+
+    if is_version_file "$name"; then
+        skipped_any=1
+        continue
+    fi
+
+    target_file="$RESTORE_DIR/$name"
+
+    if [[ -d "$target_file" ]]; then
+        error "cannot restore file because target is a directory: [$target_file]"
+        errors_any=1
+        continue
+    fi
+
+    if cp -- "$backup_file" "$target_file"; then
+        echo "Restored: $(safe_name "$name")"
+        copied_any=1
+    else
+        error "cannot copy [$backup_file] to [$target_file]"
+        errors_any=1
+    fi
+
+done < <(find "$LATEST_BACKUP" -maxdepth 1 -type f -print0)
+
+echo "Latest backup used: [$LATEST_BACKUP]"
+echo "Restore directory: [$RESTORE_DIR]"
+
+if (( copied_any == 0 )); then
+    echo "No actual files were restored"
+fi
+
+if (( skipped_any == 1 )); then
+    echo "Old version files were skipped"
+fi
+
+if (( errors_any == 1 )); then
+    exit 1
+fi
+
+exit 0

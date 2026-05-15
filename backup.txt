@@ -1,0 +1,221 @@
+#!/bin/bash
+
+HOME_DIR="$HOME"
+SOURCE_DIR="$HOME_DIR/source"
+REPORT_FILE="$HOME_DIR/backup-report"
+TODAY="$(date +%F)"
+TODAY_SEC="$(date -d "$TODAY" +%s)"
+
+error() {
+    echo "Error: $1" >&2
+}
+
+safe_name() {
+    printf '%q' "$1"
+}
+
+is_valid_date() {
+    date -d "$1" '+%F' >/dev/null 2>&1
+}
+
+get_active_backup() {
+    local best_dir=""
+    local best_sec=0
+
+    while IFS= read -r -d '' dir; do
+        local base
+        local date_part
+        local dir_sec
+        local diff_days
+
+        base="$(basename -- "$dir")"
+        date_part="${base#Backup-}"
+
+        if ! [[ "$date_part" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            continue
+        fi
+
+        if ! is_valid_date "$date_part"; then
+            continue
+        fi
+
+        dir_sec="$(date -d "$date_part" +%s)"
+        diff_days=$(( (TODAY_SEC - dir_sec) / 86400 ))
+
+        if (( diff_days >= 0 && diff_days < 7 )); then
+            if (( dir_sec > best_sec )); then
+                best_sec="$dir_sec"
+                best_dir="$dir"
+            fi
+        fi
+    done < <(find "$HOME_DIR" -maxdepth 1 -type d -name 'Backup-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' -print0 2>/dev/null)
+
+    printf '%s' "$best_dir"
+}
+
+make_unique_version_name() {
+    local path="$1"
+    local candidate="${path}.${TODAY}"
+    local counter=1
+
+    while [[ -e "$candidate" ]]; do
+        candidate="${path}.${TODAY}.${counter}"
+        counter=$((counter + 1))
+    done
+
+    printf '%s' "$candidate"
+}
+
+if [[ ! -d "$SOURCE_DIR" ]]; then
+    error "source directory not found: [$SOURCE_DIR]"
+    exit 1
+fi
+
+ACTIVE_BACKUP="$(get_active_backup)"
+
+NEW_BACKUP_CREATED=0
+
+if [[ -z "$ACTIVE_BACKUP" ]]; then
+    ACTIVE_BACKUP="$HOME_DIR/Backup-$TODAY"
+
+    if [[ -e "$ACTIVE_BACKUP" && ! -d "$ACTIVE_BACKUP" ]]; then
+        error "path exists but is not a directory: [$ACTIVE_BACKUP]"
+        exit 1
+    fi
+
+    if ! mkdir -p -- "$ACTIVE_BACKUP"; then
+        error "cannot create backup directory: [$ACTIVE_BACKUP]"
+        exit 1
+    fi
+
+    NEW_BACKUP_CREATED=1
+fi
+
+if [[ ! -w "$ACTIVE_BACKUP" ]]; then
+    error "backup directory is not writable: [$ACTIVE_BACKUP]"
+    exit 1
+fi
+
+if ! touch -- "$REPORT_FILE" 2>/dev/null; then
+    error "cannot write report file: [$REPORT_FILE]"
+    exit 1
+fi
+
+if (( NEW_BACKUP_CREATED == 1 )); then
+    {
+        echo "Backup directory created: $(safe_name "$ACTIVE_BACKUP") date: $TODAY"
+        echo "Copied files:"
+    } >> "$REPORT_FILE"
+
+    copied_any=0
+
+    while IFS= read -r -d '' src_file; do
+        name="$(basename -- "$src_file")"
+        dst_file="$ACTIVE_BACKUP/$name"
+
+        if cp -- "$src_file" "$dst_file"; then
+            echo "  $(safe_name "$name")" >> "$REPORT_FILE"
+            copied_any=1
+        else
+            echo "  ERROR: cannot copy $(safe_name "$name")" >> "$REPORT_FILE"
+            error "cannot copy [$src_file] to [$dst_file]"
+        fi
+    done < <(find "$SOURCE_DIR" -maxdepth 1 -type f -print0)
+
+    if (( copied_any == 0 )); then
+        echo "  No regular files found in source directory" >> "$REPORT_FILE"
+    fi
+
+    echo "Backup completed: [$ACTIVE_BACKUP]"
+    exit 0
+fi
+
+{
+    echo "Backup directory updated: $(safe_name "$ACTIVE_BACKUP") date: $TODAY"
+    echo "Added new files:"
+} >> "$REPORT_FILE"
+
+added_any=0
+updated_any=0
+
+TMP_UPDATED="$(mktemp)" || {
+    error "cannot create temporary file"
+    exit 1
+}
+
+while IFS= read -r -d '' src_file; do
+    name="$(basename -- "$src_file")"
+    dst_file="$ACTIVE_BACKUP/$name"
+
+    if [[ ! -e "$dst_file" ]]; then
+        if cp -- "$src_file" "$dst_file"; then
+            echo "  $(safe_name "$name")" >> "$REPORT_FILE"
+            added_any=1
+        else
+            echo "  ERROR: cannot copy new file $(safe_name "$name")" >> "$REPORT_FILE"
+            error "cannot copy [$src_file] to [$dst_file]"
+        fi
+
+        continue
+    fi
+
+    if [[ ! -f "$dst_file" ]]; then
+        echo "  ERROR: target exists and is not regular file $(safe_name "$name")" >> "$REPORT_FILE"
+        error "target exists and is not a regular file: [$dst_file]"
+        continue
+    fi
+
+    src_size="$(stat -c%s -- "$src_file" 2>/dev/null)"
+    dst_size="$(stat -c%s -- "$dst_file" 2>/dev/null)"
+
+    if [[ -z "$src_size" || -z "$dst_size" ]]; then
+        echo "  ERROR: cannot get file size for $(safe_name "$name")" >> "$REPORT_FILE"
+        error "cannot get file size for [$src_file] or [$dst_file]"
+        continue
+    fi
+
+    if [[ "$src_size" == "$dst_size" ]]; then
+        continue
+    fi
+
+    version_file="$(make_unique_version_name "$dst_file")"
+
+    if ! mv -- "$dst_file" "$version_file"; then
+        echo "  ERROR: cannot create version for $(safe_name "$name")" >> "$REPORT_FILE"
+        error "cannot rename [$dst_file] to [$version_file]"
+        continue
+    fi
+
+    if ! cp -- "$src_file" "$dst_file"; then
+        echo "  ERROR: cannot copy updated file $(safe_name "$name")" >> "$REPORT_FILE"
+        error "cannot copy updated file [$src_file] to [$dst_file]"
+
+        if [[ ! -e "$dst_file" ]]; then
+            mv -- "$version_file" "$dst_file" 2>/dev/null
+        fi
+
+        continue
+    fi
+
+    printf '  %s %s\n' "$(safe_name "$name")" "$(safe_name "$(basename -- "$version_file")")" >> "$TMP_UPDATED"
+    updated_any=1
+
+done < <(find "$SOURCE_DIR" -maxdepth 1 -type f -print0)
+
+if (( added_any == 0 )); then
+    echo "  No new files" >> "$REPORT_FILE"
+fi
+
+{
+    echo "Updated files:"
+    if (( updated_any == 1 )); then
+        cat -- "$TMP_UPDATED"
+    else
+        echo "  No updated files"
+    fi
+} >> "$REPORT_FILE"
+
+rm -f -- "$TMP_UPDATED"
+
+echo "Backup completed: [$ACTIVE_BACKUP]"
+exit 0
