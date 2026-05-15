@@ -1,0 +1,16 @@
+echo === free -h ===  system_info.log
+free -h  system_info.log
+
+echo   system_info.log
+echo === procmeminfo ===  system_info.log
+cat procmeminfo  system_info.log
+
+echo   system_info.log
+echo === procswaps ===  system_info.log
+cat procswaps  system_info.log
+
+echo   system_info.log
+echo === PAGE_SIZE ===  system_info.log
+getconf PAGE_SIZE  system_info.log
+
+cat system_info.log

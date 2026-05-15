@@ -1,0 +1,33 @@
+cat > monitor_one.bash << 'EOF'
+#!/bin/bash
+
+log_file="monitor_one.log"
+: > "$log_file"
+
+echo "time,total_mem,used_mem,free_mem,buff_cache,total_swap,used_swap,free_swap,pid,vsz,rss,cpu,mem,command" >> "$log_file"
+
+while true
+do
+    timestamp=$(date '+%H:%M:%S')
+
+    mem_line=$(free -m | awk '/^Mem:/ {print $2","$3","$4","$6}')
+    swap_line=$(free -m | awk '/^Swap:/ {print $2","$3","$4}')
+
+    pid=$(pgrep -f "./mem.bash" | head -n 1)
+
+    if [ -n "$pid" ]; then
+        proc_line=$(ps -p "$pid" -o pid=,vsz=,rss=,%cpu=,%mem=,comm= 2>/dev/null | awk '{print $1","$2","$3","$4","$5","$6}')
+        if [ -n "$proc_line" ]; then
+            echo "$timestamp,$mem_line,$swap_line,$proc_line" >> "$log_file"
+        else
+            echo "$timestamp,$mem_line,$swap_line,no_process" >> "$log_file"
+        fi
+    else
+        echo "$timestamp,$mem_line,$swap_line,no_process" >> "$log_file"
+    fi
+
+    sleep 1
+done
+EOF
+
+chmod +x monitor_one.bash
